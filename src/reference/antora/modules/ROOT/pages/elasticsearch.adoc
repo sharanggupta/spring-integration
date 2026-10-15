@@ -93,3 +93,21 @@ ElasticsearchMessageHandler elasticsearchOrdersHandler(ReactiveElasticsearchOper
 
 Like any `ReactiveMessageHandler`, the `ElasticsearchMessageHandler` is subscribed to without waiting for the result when it is used in an imperative flow.
 See xref:reactive-streams.adoc#reactive-message-handler[`ReactiveMessageHandler`] for more information.
+
+[[elasticsearch-dsl]]
+== Java DSL Support
+
+The `Elasticsearch` factory creates an `ElasticsearchMessageHandlerSpec` for the `ElasticsearchMessageHandler`, with the same options as above, and with `Function` variants of the expressions:
+
+[source, java]
+----
+@Bean
+IntegrationFlow elasticsearchOrdersFlow(ReactiveElasticsearchOperations elasticsearchOperations) {
+    return IntegrationFlow.from("orderEventsChannel")
+            .channel(MessageChannels.flux())
+            .handleReactive(Elasticsearch.outboundChannelAdapter(elasticsearchOperations)
+                    .typeFunction(message -> ((Order) message.getPayload()).isCancelled()
+                            ? ElasticsearchMessageHandler.Type.DELETE
+                            : ElasticsearchMessageHandler.Type.INDEX));
+}
+----
