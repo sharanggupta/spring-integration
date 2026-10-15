@@ -1,7 +1,7 @@
 [[elasticsearch]]
 = Elasticsearch Support
 
-Spring Integration provides a channel adapter (starting with version 7.3) for indexing documents into, and deleting documents from, Elasticsearch.
+Spring Integration provides channel adapters (starting with version 7.3) for indexing documents into, deleting documents from, and searching documents in Elasticsearch.
 It is based on the https://spring.io/projects/spring-data-elasticsearch[Spring Data Elasticsearch] project, and works with the entities that are mapped as described in the https://docs.spring.io/spring-data/elasticsearch/reference/elasticsearch/object-mapping.html[Spring Data Elasticsearch Object Mapping] chapter.
 
 This dependency is required for the project:
@@ -94,6 +94,35 @@ ElasticsearchMessageHandler elasticsearchOrdersHandler(ReactiveElasticsearchOper
 Like any `ReactiveMessageHandler`, the `ElasticsearchMessageHandler` is subscribed to without waiting for the result when it is used in an imperative flow.
 See xref:reactive-streams.adoc#reactive-message-handler[`ReactiveMessageHandler`] for more information.
 
+[[elasticsearch-inbound]]
+== Elasticsearch Inbound Channel Adapter
+
+The `ElasticsearchMessageSource` is a polled `MessageSource` that searches with the provided `ReactiveElasticsearchOperations` on every `receive()` call.
+The payload of the produced message is a `Flux` of the documents that match the query, so the flow downstream decides how to consume them, for example with a `split()`.
+
+The query is a `String` with the JSON of an Elasticsearch https://www.elastic.co/docs/explore-analyze/query-filter/languages/querydsl[Query DSL] query, or an `Expression` that evaluates to such a `String` or to a Spring Data Elasticsearch `Query` on every poll.
+The matching documents are mapped to the `payloadType`, `Map` by default.
+The `indexName` and `indexNameExpression` options set the index to search, and they are required unless the `payloadType` is an entity with a `@Document` annotation.
+
+A JSON `String` query emits all the documents that match it.
+A `Query` emits the documents of its `Pageable`, the first 10 by default in Spring Data Elasticsearch, so set a `Pageable.unpaged()` on it to emit all the matching documents.
+Every poll emits the matching documents again, including those emitted by previous polls.
+Use a query that selects only the documents to process, for example the ones created since the previous poll, or update the processed documents with an outbound channel adapter downstream so that they no longer match.
+
+The following example emits the `Order` entities whose `status` is `NEW` every five seconds:
+
+[source, java]
+----
+@Bean
+@InboundChannelAdapter(channel = "newOrdersChannel", poller = @Poller(fixedDelay = "5000"))
+ElasticsearchMessageSource newOrdersMessageSource(ReactiveElasticsearchOperations elasticsearchOperations) {
+    ElasticsearchMessageSource messageSource =
+            new ElasticsearchMessageSource(elasticsearchOperations, "{\"term\": {\"status\": \"NEW\"}}");
+    messageSource.setPayloadType(Order.class);
+    return messageSource;
+}
+----
+
 [[elasticsearch-dsl]]
 == Java DSL Support
 
@@ -109,5 +138,22 @@ IntegrationFlow elasticsearchOrdersFlow(ReactiveElasticsearchOperations elastics
                     .typeFunction(message -> ((Order) message.getPayload()).isCancelled()
                             ? ElasticsearchMessageHandler.Type.DELETE
                             : ElasticsearchMessageHandler.Type.INDEX));
+}
+----
+
+The `Elasticsearch` factory also creates an `ElasticsearchMessageSourceSpec` for the `ElasticsearchMessageSource`, with a JSON `String`, a `Query`, or a `Supplier` of a `Query` that is called on every poll:
+
+[source, java]
+----
+@Bean
+IntegrationFlow elasticsearchNewOrdersFlow(ReactiveElasticsearchOperations elasticsearchOperations) {
+    return IntegrationFlow
+            .from(Elasticsearch.inboundChannelAdapter(elasticsearchOperations,
+                                    () -> new CriteriaQuery(Criteria.where("status").is("NEW"), Pageable.unpaged()))
+                            .payloadType(Order.class),
+                    e -> e.poller(p -> p.fixedDelay(5000)))
+            .split()
+            .channel("newOrdersChannel")
+            .get();
 }
 ----
