@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import org.springframework.data.elasticsearch.core.ReactiveElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.expression.EvaluationContext;
 import org.springframework.expression.Expression;
 import org.springframework.expression.common.LiteralExpression;
@@ -37,7 +38,9 @@ import org.springframework.util.Assert;
  * {@link org.springframework.data.elasticsearch.annotations.Document} annotation,
  * unless an index name is configured;</li>
  * <li>a {@link Map}, or a {@link String} with the JSON source of the document, is saved into the
- * configured index, and Elasticsearch generates its id, so a redelivered message is indexed again;</li>
+ * configured index. With an {@link #setIdExpression(Expression) id expression}, it is upserted with
+ * that id: created if missing, and merged into the existing document otherwise. Without one,
+ * Elasticsearch generates its id, so a redelivered message is indexed again;</li>
  * <li>the elements of a {@link Collection} are saved like single payloads, with one bulk request.
  * Without an index name, they must be entities of the same class.</li>
  * </ul>
@@ -116,9 +119,9 @@ public class ElasticsearchMessageHandler extends AbstractReactiveMessageHandler 
 	}
 
 	/**
-	 * Set an expression that evaluates the id of the document to delete for each message. It is
-	 * only evaluated for the {@link Type#DELETE} operation.
-	 * @param idExpression the expression for the id of the document to delete
+	 * Set an expression that evaluates the id of the document for each message: the id of the
+	 * document to delete, or of the {@link Map} or JSON document to upsert.
+	 * @param idExpression the expression for the id of the document
 	 */
 	public void setIdExpression(Expression idExpression) {
 		Assert.notNull(idExpression, "'idExpression' must not be null");
@@ -155,6 +158,16 @@ public class ElasticsearchMessageHandler extends AbstractReactiveMessageHandler 
 			return indexAll(payloads, index);
 		}
 		Object document = toDocument(payload, index);
+		if (document instanceof Document rawDocument && this.idExpression != null) {
+			Assert.state(index != null, "An index name is required to upsert a document");
+			String id = evaluateId(message);
+			Assert.state(id != null, "'idExpression' must not evaluate to null");
+			UpdateQuery upsert = UpdateQuery.builder(id)
+					.withDocument(rawDocument)
+					.withDocAsUpsert(true)
+					.build();
+			return this.elasticsearchOperations.update(upsert, index).then();
+		}
 		Mono<Object> saved = (index != null)
 				? this.elasticsearchOperations.save(document, index)
 				: this.elasticsearchOperations.save(document);

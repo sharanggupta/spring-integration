@@ -103,6 +103,26 @@ class ElasticsearchMessageHandlerTests implements ElasticsearchContainerTest, Te
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
+	void upsertsAMapDocumentWithTheIdOfTheIdExpression() {
+		ElasticsearchMessageHandler handler = new ElasticsearchMessageHandler(operations);
+		handler.setIndexName("invoices");
+		handler.setIdExpression(PARSER.parseExpression("headers['invoiceId']"));
+		initialized(handler);
+
+		handler.handleMessage(MessageBuilder.withPayload(Map.of("status", "issued"))
+				.setHeader("invoiceId", "invoice-1")
+				.build()).block(TIMEOUT);
+		handler.handleMessage(MessageBuilder.withPayload("{\"paidOn\":\"2026-10-15\"}")
+				.setHeader("invoiceId", "invoice-1")
+				.build()).block(TIMEOUT);
+
+		assertThat(operations.get("invoice-1", Map.class, IndexCoordinates.of("invoices")).block(TIMEOUT))
+				.containsEntry("status", "issued")
+				.containsEntry("paidOn", "2026-10-15");
+	}
+
+	@Test
 	void indexesTheMapsOfACollectionPayloadIntoTheConfiguredIndex() {
 		ElasticsearchMessageHandler handler = new ElasticsearchMessageHandler(operations);
 		handler.setIndexName("refunds");
